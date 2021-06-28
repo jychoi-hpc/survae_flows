@@ -17,148 +17,11 @@ from survae.utils import iwbo_nats
 # Plot
 import torchvision.utils as vutils
 
-# %%
-def read_f0(istep, expdir=None, iphi=None, inode=0, nnodes=None, average=False, randomread=0.0, nchunk=16, fieldline=False):
-    """
-    Read XGC f0 data
-    """
-    def adios2_get_shape(f, varname):
-        nstep = int(f.available_variables()[varname]['AvailableStepsCount'])
-        shape = f.available_variables()[varname]['Shape']
-        lshape = None
-        if shape == '':
-            ## Accessing Adios1 file
-            ## Read data and figure out
-            v = f.read(varname)
-            lshape = v.shape
-        else:
-            lshape = tuple([ int(x.strip(',')) for x in shape.strip().split() ])
-        return (nstep, lshape)
-
-    fname = os.path.join(expdir, 'restart_dir/xgc.f0.%05d.bp'%istep)
-    if randomread > 0.0:
-        ## prefetch to get metadata
-        with ad2.open(fname, 'r') as f:
-            nstep, nsize = adios2_get_shape(f, 'i_f')
-            ndim = len(nsize)
-            nphi = nsize[0]
-            _nnodes = nsize[2] if nnodes is None else nnodes
-            nmu = nsize[1]
-            nvp = nsize[3]
-        assert _nnodes%nchunk == 0
-        _lnodes = list(range(inode, inode+_nnodes, nchunk))
-        lnodes = random.sample(_lnodes, k=int(len(_lnodes)*randomread))
-        lnodes = np.sort(lnodes)
-
-        lf = list()
-        li = list()
-        for i in tqdm(lnodes):
-            li.append(np.array(range(i,i+nchunk), dtype=np.int32))
-            with ad2.open(fname, 'r') as f:
-                nphi = nsize[0] if iphi is None else 1
-                iphi = 0 if iphi is None else iphi
-                start = (iphi,0,i,0)
-                count = (nphi,nmu,nchunk,nvp)
-                _f = f.read('i_f', start=start, count=count).astype('float64')
-                lf.append(_f)
-        i_f = np.concatenate(lf, axis=2)
-        lb = np.concatenate(li)
-    elif fieldline is True:
-        import networkx as nx
-
-        fname2 = os.path.join(expdir, 'xgc.mesh.bp')
-        with ad2.open(fname2, 'r') as f:
-            _nnodes = int(f.read('n_n', ))
-            nextnode = f.read('nextnode')
-        
-        G = nx.Graph()
-        for i in range(_nnodes):
-            G.add_node(i)
-        for i in range(_nnodes):
-            G.add_edge(i, nextnode[i])
-            G.add_edge(nextnode[i], i)
-        cc = [x for x in list(nx.connected_components(G)) if len(x) >= 16]
-
-        li = list()
-        for k, components in enumerate(cc):
-            DG = nx.DiGraph()
-            for i in components:
-                DG.add_node(i)
-            for i in components:
-                DG.add_edge(i, nextnode[i])
-            
-            cycle = list(nx.find_cycle(DG))
-            DG.remove_edge(*cycle[-1])
-            
-            path = nx.dag_longest_path(DG)
-            #print (k, len(components), path[0])
-            for i in path[:len(path)-len(path)%16]:
-                li.append(i)
-
-        with ad2.open(fname, 'r') as f:
-            nstep, nsize = adios2_get_shape(f, 'i_f')
-            ndim = len(nsize)
-            nphi = nsize[0] if iphi is None else 1
-            iphi = 0 if iphi is None else iphi
-            _nnodes = nsize[2]
-            nmu = nsize[1]
-            nvp = nsize[3]
-            start = (iphi,0,0,0)
-            count = (nphi,nmu,_nnodes,nvp)
-            logging.info (f"Reading: {start} {count}")
-            i_f = f.read('i_f', start=start, count=count).astype('float64')
-        
-        _nnodes = len(li)-inode if nnodes is None else nnodes
-        lb = np.array(li[inode:inode+_nnodes], dtype=np.int32)
-        logging.info (f"Fieldline: {len(lb)}")
-        logging.info (f"{lb}")
-        i_f = i_f[:,:,lb,:]
-    else:
-        with ad2.open(fname, 'r') as f:
-            nstep, nsize = adios2_get_shape(f, 'i_f')
-            ndim = len(nsize)
-            nphi = nsize[0] if iphi is None else 1
-            iphi = 0 if iphi is None else iphi
-            _nnodes = nsize[2]-inode if nnodes is None else nnodes
-            nmu = nsize[1]
-            nvp = nsize[3]
-            start = (iphi,0,inode,0)
-            count = (nphi,nmu,_nnodes,nvp)
-            logging.info (f"Reading: {start} {count}")
-            i_f = f.read('i_f', start=start, count=count).astype('float64')
-            #e_f = f.read('e_f')
-        li = list(range(inode, inode+_nnodes))
-        lb = np.array(li, dtype=np.int32)
-
-    # if i_f.shape[3] == 31:
-    #     i_f = np.append(i_f, i_f[...,30:31], axis=3)
-    #     # e_f = np.append(e_f, e_f[...,30:31], axis=3)
-    # if i_f.shape[3] == 39:
-    #     i_f = np.append(i_f, i_f[...,38:39], axis=3)
-    #     i_f = np.append(i_f, i_f[:,38:39,:,:], axis=1)
-
-    Z0 = np.moveaxis(i_f, 1, 2)
-
-    if average:
-        Z0 = np.mean(Z0, axis=0)
-        zlb = lb
-    else:
-        Z0 = Z0.reshape((-1,Z0.shape[2],Z0.shape[3]))
-        _lb = list()
-        for i in range(nphi):
-            _lb.append( i*100_000_000 + lb)
-        zlb = np.concatenate(_lb)
-    
-    #zlb = np.concatenate(li)
-    zmu = np.mean(Z0, axis=(1,2))
-    zsig = np.std(Z0, axis=(1,2))
-    zmin = np.min(Z0, axis=(1,2))
-    zmax = np.max(Z0, axis=(1,2))
-    Zif = (Z0 - zmin[:,np.newaxis,np.newaxis])/(zmax-zmin)[:,np.newaxis,np.newaxis]
-
-    return (Z0, Zif, zmu, zsig, zmin, zmax, zlb)
-
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--num_epochs', help='num of epochs (default: %(default)s)', type=int, default=20)
+    args = parser.parse_args()
+
     ############
     ## Device ##
     ############
@@ -169,63 +32,8 @@ if __name__ == '__main__':
     ## Data ##
     ##########
 
-    # data = DynamicallyBinarizedMNIST()
-    # train_loader, test_loader = data.get_data_loaders(128)
-
-    Z0, Zif, zmu, zsig, zmin, zmax, zlb = read_f0(420, expdir='d3d_coarse_v2_colab', iphi=0)
-    import pdb; pdb.set_trace()
-
-    with ad2.open('d3d_coarse_v2-recon.bp', 'r') as f:
-        Xrec = f.read('i_f_recon').astype(np.float32)
-        # if Xrec.shape[3] == 39:
-        #     Xrec = np.append(Xrec, Xrec[...,38:39], axis=3)
-        #     Xrec = np.append(Xrec, Xrec[:,:,38:39,:], axis=2)
-
-    _, nx, ny = Z0.shape
-    nx = nx * args.fno_rescale
-    ny = ny * args.fno_rescale
-    x = np.linspace(0, 1, nx, dtype=np.float32)
-    y = np.linspace(0, 1, ny, dtype=np.float32)
-    xv, yv = np.meshgrid(x, y)
-    # grid = np.stack([xv, yv], axis=2)
-    # grid = torch.tensor(grid, dtype=torch.float)
-
-    lx = list()
-    ly = list()
-    for i in range(len(zlb)):
-        iphi, inode = zlb[i,2:]
-        X = Xrec[iphi,inode,:]
-        # X = (X-np.min(X))/(np.max(X)-np.min(X))
-        if args.fno_rescale>1:
-            X = resize(X, (nx,ny), order=0, anti_aliasing=False)
-        # img = Image.fromarray(X)
-        # img = img.resize((Z0.shape[-2],Z0.shape[-1]))
-        # X = np.array(img)
-        lx.append(np.stack([X, xv, yv], axis=2))
-        # lx.append(Xrec[i,:])
-        Z = Zif[i,:]
-        if args.fno_rescale>1:
-            Z = resize(Z, (nx,ny), order=0, anti_aliasing=False)
-        ly.append(Z)
-    
-    X_train, X_test, y_train, y_test = train_test_split(lx, ly, test_size=0.3)
-    print (lx[0].shape, ly[0].shape, len(X_train), len(X_test))
-
-    # X_train, y_train = rescale(X_train, grid), torch.tensor(y_train)
-    # X_test, y_test = rescale(X_test, grid), torch.tensor(y_test)
-    # X_full, y_full = rescale(lx, grid), torch.tensor(ly)
-    X_train, y_train = torch.tensor(X_train), torch.tensor(y_train)
-    X_test, y_test = torch.tensor(X_test), torch.tensor(y_test)
-    X_full, y_full = torch.tensor(lx), torch.tensor(ly)
-
-    training_data = torch.utils.data.TensorDataset(X_train, y_train)
-    validation_data = torch.utils.data.TensorDataset(X_test, y_test)
-    full_data = torch.utils.data.TensorDataset(X_full, y_full)
-
-    train_loader = torch.utils.data.DataLoader(full_data, batch_size=batch_size, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(full_data, batch_size=batch_size, shuffle=True)
-    full_loader = torch.utils.data.DataLoader(full_data, batch_size=1, shuffle=False)
-
+    data = DynamicallyBinarizedMNIST()
+    train_loader, test_loader = data.get_data_loaders(128)
 
     ###########
     ## Model ##
@@ -266,7 +74,7 @@ if __name__ == '__main__':
     ###########
 
     print('Training...')
-    for epoch in range(50):
+    for epoch in range(args.num_epochs):
         l = 0.0
         for i, x in enumerate(train_loader):
             optimizer.zero_grad()
@@ -274,7 +82,7 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             l += loss.detach().cpu().item()
-            print('Epoch: {}/{}, Iter: {}/{}, Nats: {:.3f}'.format(epoch+1, 20, i+1, len(train_loader), l/(i+1)), end='\r')
+            print('Epoch: {}/{}, Iter: {}/{}, Nats: {:.3f}'.format(epoch+1, args.num_epochs, i+1, len(train_loader), l/(i+1)), end='\r')
         print('')
 
     ##########

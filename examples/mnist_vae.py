@@ -18,6 +18,10 @@ from survae.utils import iwbo_nats
 import torchvision.utils as vutils
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--num_epochs', help='num of epochs (default: %(default)s)', type=int, default=20)
+    args = parser.parse_args()
+
     ############
     ## Device ##
     ############
@@ -62,7 +66,7 @@ if __name__ == '__main__':
     ###########
 
     print('Training...')
-    for epoch in range(20):
+    for epoch in range(args.num_epochs):
         l = 0.0
         for i, x in enumerate(train_loader):
             optimizer.zero_grad()
@@ -70,7 +74,7 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             l += loss.detach().cpu().item()
-            print('Epoch: {}/{}, Iter: {}/{}, Nats: {:.3f}'.format(epoch+1, 20, i+1, len(train_loader), l/(i+1)), end='\r')
+            print('Epoch: {}/{}, Iter: {}/{}, Nats: {:.3f}'.format(epoch+1, args.num_epochs, i+1, len(train_loader), l/(i+1)), end='\r')
         print('')
 
     ##########
