@@ -284,5 +284,5 @@ if __name__ == '__main__':
     img = img[:64]
     samples = model.sample(64)
     
-    vutils.save_image(img.cpu().float(), fp='mnist_data.png', nrow=8)
-    vutils.save_image(samples.cpu().float(), fp='mnist_vae.png', nrow=8)
+    vutils.save_image(img.cpu().float(), fp='xgc_data.png', nrow=8)
+    vutils.save_image(samples.cpu().float(), fp='xgc_vae.png', nrow=8)
